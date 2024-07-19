@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+@font-face {
+    font-family: 'kei-font';
+    src: url('/fonts/keifont.ttf') format('truetype');
+    font-weight: bold;
+    font-style: normal;
+}
+
+/* PC */
+.footer_padding {
+    padding-bottom: 150px;
+}
+
+.bg-custom {
+    background: #F5F5F5;
+}
+
+/* Mobile */
+@media only screen and (max-width: 768px) {  
+    .footer_padding {
+        padding-bottom: 120px;
+    }
+}
+
+@media only screen and (max-width: 640px) {  
+    .footer_padding {
+        padding-bottom: 180px;
+    }
+}
+
+        /* table, th, td {
+        border: 1px solid black;
+        border-collapse: collapse;
+        }
+        th, td {
+        padding: 5px;
+        text-align: left;    
+        } */
+
+
+
