@@ -12,6 +12,7 @@ use App\Models\Point;
 use App\Models\Favorite;
 
 use App\Models\Product;
+use App\Models\Product_log;
 use App\Models\Profile;
 use App\Models\Gacha_lost_product;
 
@@ -27,6 +28,7 @@ use App\Http\Resources\ProductListResource;
 use App\Http\Resources\FavoriteListResource;
 use App\Http\Resources\PointList;
 use App\Http\Resources\GachaListResource;
+
 use Str;
 
 use \Exception;
@@ -35,9 +37,13 @@ use Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Response;
 
 use Stripe\Stripe;
 use Stripe\PaymentIntent;
+
+use App\Notifications\PushNotification;
 
 class ApiController extends Controller
 {
@@ -87,6 +93,7 @@ class ApiController extends Controller
         $result = (object)[
             "success" => false,
         ];
+
         $userLock = Cache::lock('startGacha'.$user->id, 60);
         if (!$userLock->get()) {
             return $result;
@@ -194,78 +201,123 @@ class ApiController extends Controller
             return 1;  // Check Gacha Product   #3
         }
 
+        $max_point = 0;
+        
+        // from
         foreach($award_products as $key) {
             $product_item = Product::find($key);
-            if ($product_item->is_last==0) {
-                if ($product_item->marks>0) {
-                    if ($product_item->is_lost_product==0) {
-                        $data = [
-                            'marks' => ($product_item->marks-1),
-                        ];
-                        Product::where('id', $key)->update($data);
+            if ($max_point<$product_item->point) {
+                $max_point = $product_item->point;
+            }
+            if ($product_item->marks>0) {
+                $product_item->decrement('marks');
 
-                        $data = [
-                            'name' => $product_item->name,
-                            'point' => $product_item->point,
-                            'rare' => $product_item->rare,
-                            'image' => $product_item->image,
-                            'marks' => 1,
-                            'is_last' => $product_item->is_last,
-                            'lost_type' => $product_item->lost_type,
-                            'is_lost_product' => $product_item->is_lost_product,
-                            'gacha_id' => $gacha->id,
-                            'category_id' => $product_item->category_id,
-                            'gacha_record_id' => $token, 
-                            'user_id' => $user->id,
-                            'status' => 1
-                        ];
-                        Product::create($data);
-                    } else {
-                        if ($product_item->is_lost_product==1) {
-                            $values = Gacha_lost_product::where('gacha_id', $gacha->id)->where('point', $product_item->point)->where('count','>',0)->get();
-                            if (count($values)) {
-                                $data = [
-                                    'count' => $values[0]->count - 1,
-                                ];
-                                $values[0]->update($data);
-
-                                $data = [
-                                    'marks' => ($product_item->marks-1),
-                                ];
-                                Product::where('id', $key)->update($data);
-
-                                $data = [
-                                    'name' => $product_item->name,
-                                    'point' => $product_item->point,
-                                    'rare' => $product_item->rare,
-                                    'marks' => $product_item->id,
-                                    'lost_type' => $product_item->lost_type,
-                                    'category_id' => $product_item->category_id,
-                                    'is_lost_product' => 1,
-                                    'image' => $product_item->image,
-
-                                    'gacha_id' => $gacha->id,
-                                    'user_id' => $user->id,
-                                    'gacha_record_id' => $token, 
-                                    'status' => 1
-                                ];
-                                Product::create($data);
-                            }
-                        }
-                    }
-                }
-            } else {
                 $data = [
-                    'user_id' => $user->id,
+                    'product_id' => $product_item->id,
+                    'point' => $product_item->point,
+                    'rare' => $product_item->rare,
+                    'image' => $product_item->image,
+                    'name' => $product_item->name,
                     'gacha_record_id' => $token,
+                    'user_id' => $user->id,
                     'status' => 1
                 ];
-                Product::where('id', $key)->update($data);
+
+                Product_log::create($data);
+
+                if ($product_item->is_lost_product == 1) {
+                    Gacha_lost_product::where('gacha_id', $gacha->id)
+                        ->where('point', $product_item->point)
+                        ->where('count','>',0)
+                        ->first()?->decrement('count');
+                }
             }
+        
         }
+
         $gacha->update(['count'=> $gacha->count + $number ]);
         
-        return 0;
+        return $data = [
+            'result' => 0,
+            'max_point' => $max_point
+        ];
+
+        // foreach($award_products as $key) {
+        //     $product_item = Product::find($key);
+        //     if ($product_item->is_last==0) {
+        //         if ($product_item->marks>0) {
+        //             if ($product_item->is_lost_product==0) {
+        //                 $data = [
+        //                     'marks' => ($product_item->marks-1),
+        //                 ];
+        //                 Product::where('id', $key)->update($data);
+
+        //                 $data = [
+        //                     'name' => $product_item->name,
+        //                     'point' => $product_item->point,
+        //                     'rare' => $product_item->rare,
+        //                     'image' => $product_item->image,
+        //                     'marks' => 1,
+        //                     'is_last' => $product_item->is_last,
+        //                     'lost_type' => $product_item->lost_type,
+        //                     'is_lost_product' => $product_item->is_lost_product,
+        //                     'gacha_id' => $gacha->id,
+        //                     'category_id' => $product_item->category_id,
+        //                     'gacha_record_id' => $token, 
+        //                     'user_id' => $user->id,
+        //                     'status' => 1
+        //                 ];
+        //                 Product::create($data);
+        //             } else {
+        //                 if ($product_item->is_lost_product==1) {
+        //                     $values = Gacha_lost_product::where('gacha_id', $gacha->id)->where('point', $product_item->point)->where('count','>',0)->get();
+        //                     if (count($values)) {
+        //                         $data = [
+        //                             'count' => $values[0]->count - 1,
+        //                         ];
+        //                         $values[0]->update($data);
+
+        //                         $data = [
+        //                             'marks' => ($product_item->marks-1),
+        //                         ];
+        //                         Product::where('id', $key)->update($data);
+
+        //                         $data = [
+        //                             'name' => $product_item->name,
+        //                             'point' => $product_item->point,
+        //                             'rare' => $product_item->rare,
+        //                             'marks' => $product_item->id,
+        //                             'lost_type' => $product_item->lost_type,
+        //                             'category_id' => $product_item->category_id,
+        //                             'is_lost_product' => 1,
+        //                             'image' => $product_item->image,
+
+        //                             'gacha_id' => $gacha->id,
+        //                             'user_id' => $user->id,
+        //                             'gacha_record_id' => $token, 
+        //                             'status' => 1
+        //                         ];
+        //                         Product::create($data);
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     } else {
+        //         $data = [
+        //             'user_id' => $user->id,
+        //             'gacha_record_id' => $token,
+        //             'status' => 1
+        //         ];
+        //         Product::where('id', $key)->update($data);
+        //     }
+        // }
+        // $gacha->update(['count'=> $gacha->count + $number ]);
+        
+        // return $max_point;
+        // // return $result = [
+        // //     'result' => 0,
+        // //     'max_point' => $max_point
+        // // ];
     }
 
     public function get_period_day($current) {
@@ -284,7 +336,7 @@ class ApiController extends Controller
 
     public function gacha_result($token) {
         $user = auth('api')->user();
-        $products = Product::where('gacha_record_id', $token)->where('user_id', $user->id)->orderBy('is_last', 'ASC')->get();
+        $products = Product_log::where('gacha_record_id', $token)->where('user_id', $user->id)->orderBy('point', 'DESC')->get();
         $max_point = 0;
         foreach ($products as $product) {
             $max_point = max($max_point, $product->point);
@@ -301,25 +353,32 @@ class ApiController extends Controller
     }
 
     public function result_exchange(Request $request) {
-        $token = $request->token;
+        DB::beginTransaction();
+        $token = $request->token; 
         $checks = $request->checks;
         $user = auth('api')->user();
-        $products = Product::where('gacha_record_id', $token)->where('user_id', $user->id)->where('status', 1)->get();
+        $logs = Product_log::where('gacha_record_id', $token)->where('status', 1)->get();
   
         $point = $user->point;
-        foreach($products as $product) {
-            $key = "id" . $product->id;
+        foreach($logs as $log) {
+            $key = "id" . $log->id;
             if (isset($checks[$key]) && $checks[$key]) {
-                $point = $point + $product->point;
-                $product->status = 2;
-                $product->save();
-                Product::find($product->marks)?->increment('marks', 1);
+                $log->status = 2;
+                $log->save();
+                if ($product = Product::find($log->product_id)) {
+                    if ($product->is_lost_product == 1)
+                        $product->increment('marks');
+                }
+                $point = $point + $log->point;
             }
         }
         $user->update(['point'=>$point]);
+        $user = auth('api')->user();
+        DB::commit();
 
         return [
-            'success' => true
+            'success' => true,
+            'user' => $user
         ];
     }
 
@@ -327,7 +386,7 @@ class ApiController extends Controller
         $point = 0; $number_products = 0;
         if ($token) {
             $user = auth('api')->user();
-            $products = Product::where('gacha_record_id', $token)->where('user_id', $user->id)->where('status', 2)->get();
+            $products = Product_log::where('gacha_record_id', $token)->where('user_id', $user->id)->where('status', 2)->get();
             
             foreach($products as $product) {
                 if ($product->status==2) {
@@ -863,32 +922,38 @@ class ApiController extends Controller
         $number = $request->number;
         $gacha = Gacha::find($id);
         $user = auth('api')->user();
-        
         $userLock = Cache::lock('startGacha'.$user->id, 60);
+
+        $result = (object)[
+            "success" => false,
+        ];
+
         if (!$userLock->get()) {
-            return redirect()->route('main'); 
+            return $result;
         }
 
         try {
 
             if (!$gacha || $gacha->count_card == $gacha->count) {
-                return redirect()->route('main'); 
+                return $result; 
             }
             
             $totalSpin = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->sum('type');
             $remainingSpin = $gacha->spin_limit - $totalSpin;
             if ($remainingSpin < 0) $remainingSpin = 0;
-    
+            
             $count_rest = $gacha->count_card - $gacha->count;
             if ($number > $count_rest) $number = $count_rest;
             if ($number > $remainingSpin) {
-                return redirect()->back()->with('message', 'このガチャは'.$gacha->spin_limit.'回までガチャできます。 すでに回したガチャ数は'.$totalSpin.'回です。')
-                ->with('title', 'ガチャ回数超過!')->with('message_id', Str::random(9))->with('type', 'dialog');
+                return response()->json([
+                    'message' => 'このガチャは'.$gacha->spin_limit.'回までガチャできます。 すでに回したガチャ数は'.$totalSpin.'回です。',
+                    'message_id' => Str::random(9),
+                    'title' => 'ガチャ回数超過!'
+                ]);
             }
     
             $this->check_current_status($gacha);
             $status = $gacha->gacha_limit_status;
-    
             if ($status == 1) {
                 if ($number > 1) {
                     $message = '1日1回以上ガチャできません。';
@@ -900,18 +965,28 @@ class ApiController extends Controller
                     $record = $this->get_period_day($last->updated_at);
                     if ($now == $record) {
                         $message = '1日1回以上ガチャできません。';
-                        return redirect()->back()->with('message', $message)->with('title', '1日1回ガチャ制限')->with('message_id', Str::random(9))->with('type', 'dialog');
+                        return response()->json([
+                            'message' => $message,
+                            'title' => '1日1回ガチャ制限',
+                            'message_id' => Str::random(9)
+                        ]);
                     }
                 }
             }     
             if ($number > $remainingSpin) {
-                return redirect()->back()->with('message', 'このガチャは'.$gacha->spin_limit.'回までガチャできます。<br>すでに回したガチャ数は'.$totalSpin.'回です。')->with('title', 'ガチャ回数超過!')->with('message_id', Str::random(9))->with('type', 'dialog');
+                return response()->json([
+                    'message' => 'このガチャは'.$gacha->spin_limit.'回までガチャできます。<br>すでに回したガチャ数は'.$totalSpin.'回です。',
+                    'title' => 'ガチャ回数超過!',
+                    'message_id' => Str::random(9)
+                ]);
             }
             
             $gacha_point = $gacha->point * $number;
             $user_point = $user->point;
-            if ($user_point< $gacha_point) {
-                return redirect()->route('user.point');
+            if ($user_point < $gacha_point) {
+                return response()->json([
+                    'url' => 'points'
+                ]);
             }
     
             $lock = Cache::lock('startGacha', 60);
@@ -924,13 +999,12 @@ class ApiController extends Controller
                     'type' => $number
                 ];
                 $gacha_record = Gacha_record::create($data);
-                
                 $token = $gacha_record->id;
                 $result = $this->reward($user, $gacha, $number, $token);
-                
                 $lock?->release();
-                if (isset($result->max_point)) {
-                    $max_point = $result->max_point;
+
+                if (isset($result['max_point'])) {
+                    $max_point = $result['max_point'];
                     $gacha_record->update(['status'=>1]);
                     
                     $dp = $number + $user->dp;
@@ -940,7 +1014,13 @@ class ApiController extends Controller
 
                     $hide_cat_bar = 1;
                     $video = getVideo($max_point);
-                    return inertia('User/Video', compact('hide_cat_bar', 'video', 'token'));
+
+                    return response()->json([
+                        'video' => $video,
+                        'token' => $token,
+                        'hide_cat_bar' => $hide_cat_bar
+                    ]);
+                    // return inertia('User/Video', compact('hide_cat_bar', 'video', 'token'));
                 }
                 if ($result==1) {
                     $text = "サーバーが混み合っております。少し時間をおいて再度お試しください。";
@@ -1092,5 +1172,14 @@ class ApiController extends Controller
         return response()->json([
             'url' => 'point'
         ]);
+    }
+
+    public function sendNotification(Request $request){
+
+        // return $request;
+        $user = auth('api')->user();
+        $user->notify(new PushNotification($request->title, $request->content));
+
+        return $user->notify(new PushNotification($request->title, $request->content));
     }
 }
