@@ -236,7 +236,7 @@ class ApiController extends Controller
         }
 
         $gacha->update(['count'=> $gacha->count + $number ]);
-        
+
         return $data = [
             'result' => 0,
             'max_point' => $max_point
@@ -998,9 +998,13 @@ class ApiController extends Controller
                     'gacha_id' => $gacha->id,
                     'type' => $number
                 ];
+
                 $gacha_record = Gacha_record::create($data);
-                $token = $gacha_record->id;
-                $result = $this->reward($user, $gacha, $number, $token);
+
+                $token = $gacha_record->id; 
+                
+                $result = $this->reward($user, $gacha, $number, $token); 
+
                 $lock?->release();
 
                 if (isset($result['max_point'])) {
