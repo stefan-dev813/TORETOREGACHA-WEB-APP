@@ -49,8 +49,7 @@ Route::get('gachas/detail/{id}', [ApiController::class, 'gacha_detail']);
 
 Route::group(['middleware' => ['auth.api']], function() {
     // gacha
-    // Route::post('gacha/start', [ApiController::class, 'gacha_start']);
-    Route::post('gacha/start', [ApiController::class, 'startPost']);
+    Route::post('gacha/start', [ApiController::class, 'gacha_start']);
     Route::get('gacha/result/{token}', [ApiController::class, 'gacha_result']);
     Route::post('gacha/result/exchange', [ApiController::class, 'result_exchange']);
     Route::get('gacha/end/{token}', [ApiController::class, 'gacha_end']);
@@ -79,10 +78,9 @@ Route::group(['middleware' => ['auth.api']], function() {
     Route::post('profile', [ApiController::class, 'profile_post']);
     Route::put('profile', [ApiController::class, 'updateProfile']);
     Route::put('profile/password', [ApiController::class, 'updateProfilePassword']);
+
+
     // 
-
-    // Route::post('gacha/start', [ApiController::class, 'startPost']);
-
     Route::post('notify', [ApiController::class, 'sendNotification']);
 
     

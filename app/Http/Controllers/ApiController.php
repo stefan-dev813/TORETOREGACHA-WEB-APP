@@ -84,108 +84,6 @@ class ApiController extends Controller
         ];
     }
 
-    public function gacha_start(Request $request) {
-        $id = $request->id;
-        $number = $request->number;
-        $gacha = Gacha::find($id);
-        $user = auth('api')->user();
-        
-        $result = (object)[
-            "success" => false,
-        ];
-
-        $userLock = Cache::lock('startGacha'.$user->id, 60);
-        if (!$userLock->get()) {
-            return $result;
-        }
-
-        try {
-
-            if (!$gacha || $gacha->status == 0 || $gacha->count_card == $gacha->count) {
-                $result->message = "ガチャカードは存在しません！";
-                return $result;
-            }
-            
-            $totalSpin = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->sum('type');
-            $remainingSpin = $gacha->spin_limit - $totalSpin;
-            if ($remainingSpin < 0) $remainingSpin = 0;
-    
-            $count_rest = $gacha->count_card - $gacha->count;
-            if ($number > $count_rest) $number = $count_rest;
-            if ($number > $remainingSpin) {
-                $result->message = 'このガチャは'.$gacha->spin_limit.'回までガチャできます。 すでに回したガチャ数は'.$totalSpin.'回です。';
-                return $result;
-            }
-    
-            $this->check_current_status($gacha);
-            $status = $gacha->gacha_limit_status;
-    
-            if ($status == 1) {
-                if ($number > 1) {
-                    $result -> message = '1日1回以上ガチャできません。';
-                    return $result;
-                }
-                $last = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->latest()->first();
-                if ($last) {
-                    $now = $this->get_period_day(date('Y-m-d H:i:s'));
-                    $record = $this->get_period_day($last->updated_at);
-                    if ($now == $record) {
-                        $result -> message = '1日1回以上ガチャできません。';
-                        return $result;
-                    }
-                }
-            }     
-            
-            $gacha_point = $gacha->point * $number;
-            $user_point = $user->point;
-            if ($user_point< $gacha_point) {
-                $result->redirect_url = 'points';
-                return $result;
-            }
-    
-            $lock = Cache::lock('startGacha', 60);
-            try {
-                $lock->block(10);
-                
-                $data = [
-                    'user_id' => $user->id,
-                    'gacha_id' => $gacha->id,
-                    'type' => $number
-                ];
-                $gacha_record = Gacha_record::create($data);
-                
-                $token = $gacha_record->id;
-                $res = $this->reward($user, $gacha, $number, $token);
-                
-                $lock?->release();
-                if ($res == 0) {
-                    $gacha_record->update(['status'=>1]);
-                    
-                    $dp = $number + $user->dp;
-                    $point = $user->point;
-                    $point = $point - $gacha->point * $number;
-                    $user->update(['dp'=>$dp, 'point'=>$point]);
-
-                    $hide_cat_bar = 1;
-                    $result -> success = true;
-                    $result -> token = $token;
-                    return $result;
-                }
-                if ($res==1) $result -> message = "サーバーが混み合っております。少し時間をおいて再度お試しください。";
-                else if ($res==2) $result -> message = "ガチャ回数を超えました！";
-                else if ($res==3) $result -> message = "ガチャ時間を超えました！";
-                else if ($res==4) $result -> message = "ユーザーポイントが足りません。";
-
-                return $result;
-            } catch (LockTimeoutException $e) {
-                $result -> message = "ガチャ時間を超えました！";
-                return $result;
-            }
-        } finally {
-            $userLock?->release();
-        }
-    }
-
     public function reward($user, $gacha, $number, $token) {
         $user = User::find($user->id);
         $gacha = Gacha::find($gacha->id);
@@ -196,7 +94,7 @@ class ApiController extends Controller
         if ($point<0) return 4;
 
         $count_rest = $gacha->count_card - $gacha->count;
-        $award_products = $gacha->getAward($number, $count_rest); 
+        $award_products = $gacha->getAward($number, $count_rest); return $gacha->getAward($number, $count_rest);
         if ($award_products) {} else {
             return 1;  // Check Gacha Product   #3
         }
@@ -237,87 +135,121 @@ class ApiController extends Controller
 
         $gacha->update(['count'=> $gacha->count + $number ]);
 
-        return $data = [
-            'result' => 0,
-            'max_point' => $max_point
+        $result['result'] = 0;
+        $result['max_point'] = $max_point;
+
+        return $result;
+    }
+
+    public function gacha_start(Request $request){
+        $id = $request->id;
+        $number = $request->number;
+        $gacha = Gacha::find($id);
+        $user = auth('api')->user();
+        
+        $result = (object)[
+            "success" => false,
         ];
 
-        // foreach($award_products as $key) {
-        //     $product_item = Product::find($key);
-        //     if ($product_item->is_last==0) {
-        //         if ($product_item->marks>0) {
-        //             if ($product_item->is_lost_product==0) {
-        //                 $data = [
-        //                     'marks' => ($product_item->marks-1),
-        //                 ];
-        //                 Product::where('id', $key)->update($data);
+        $userLock = Cache::lock('startGacha'.$user->id, 60);
+        if (!$userLock->get()) {
+            return $result;
+        }
 
-        //                 $data = [
-        //                     'name' => $product_item->name,
-        //                     'point' => $product_item->point,
-        //                     'rare' => $product_item->rare,
-        //                     'image' => $product_item->image,
-        //                     'marks' => 1,
-        //                     'is_last' => $product_item->is_last,
-        //                     'lost_type' => $product_item->lost_type,
-        //                     'is_lost_product' => $product_item->is_lost_product,
-        //                     'gacha_id' => $gacha->id,
-        //                     'category_id' => $product_item->category_id,
-        //                     'gacha_record_id' => $token, 
-        //                     'user_id' => $user->id,
-        //                     'status' => 1
-        //                 ];
-        //                 Product::create($data);
-        //             } else {
-        //                 if ($product_item->is_lost_product==1) {
-        //                     $values = Gacha_lost_product::where('gacha_id', $gacha->id)->where('point', $product_item->point)->where('count','>',0)->get();
-        //                     if (count($values)) {
-        //                         $data = [
-        //                             'count' => $values[0]->count - 1,
-        //                         ];
-        //                         $values[0]->update($data);
+        try {
 
-        //                         $data = [
-        //                             'marks' => ($product_item->marks-1),
-        //                         ];
-        //                         Product::where('id', $key)->update($data);
+            if (!$gacha || $gacha->status == 0 || $gacha->count_card == $gacha->count) {
+                $result->message = "ガチャカードは存在しません！";
+                return $result;
+            }
+            
+            $totalSpin = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->sum('type');
+            $remainingSpin = $gacha->spin_limit - $totalSpin;
+            if ($remainingSpin < 0) $remainingSpin = 0;
+    
+            $count_rest = $gacha->count_card - $gacha->count;
+            if ($number > $count_rest) $number = $count_rest;
+            if ($number > $remainingSpin) {
+                $result->message = 'このガチャは'.$gacha->spin_limit.'回までガチャできます。 すでに回したガチャ数は'.$totalSpin.'回です。';
+                return $result;
+            }
+    
+            $this->check_current_status($gacha);
+            $status = $gacha->gacha_limit_status;
+    
+            if ($status == 1) {
+                if ($number > 1) {
+                    $result -> message = '1日1回以上ガチャできません。';
+                    return $result;
+                }
 
-        //                         $data = [
-        //                             'name' => $product_item->name,
-        //                             'point' => $product_item->point,
-        //                             'rare' => $product_item->rare,
-        //                             'marks' => $product_item->id,
-        //                             'lost_type' => $product_item->lost_type,
-        //                             'category_id' => $product_item->category_id,
-        //                             'is_lost_product' => 1,
-        //                             'image' => $product_item->image,
+                $last = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->latest()->first();
+                if ($last) {
+                    $now = $this->get_period_day(date('Y-m-d H:i:s'));
+                    $record = $this->get_period_day($last->updated_at);
+                    if ($now == $record) {
+                        $result -> message = '1日1回以上ガチャできません。';
+                        return $result;
+                    }
+                }
+            }     
+            
+	    
+            $gacha_point = $gacha->point * $number;
+            $user_point = $user->point;
+            if ($user_point< $gacha_point) {
+	            $result->redirect_url = 'points';
+		        return $result;
+            }
+    
+            $lock = Cache::lock('startGacha', 60);
+            try {
+                $lock->block(10);
+                
+                $data = [
+                    'user_id' => $user->id,
+                    'gacha_id' => $gacha->id,
+                    'type' => $number
+                ];
+                $gacha_record = Gacha_record::create($data);
+                
+                $token = $gacha_record->id;
+                $res = $this->reward($user, $gacha, $number, $token);
 
-        //                             'gacha_id' => $gacha->id,
-        //                             'user_id' => $user->id,
-        //                             'gacha_record_id' => $token, 
-        //                             'status' => 1
-        //                         ];
-        //                         Product::create($data);
-        //                     }
-        //                 }
-        //             }
-        //         }
-        //     } else {
-        //         $data = [
-        //             'user_id' => $user->id,
-        //             'gacha_record_id' => $token,
-        //             'status' => 1
-        //         ];
-        //         Product::where('id', $key)->update($data);
-        //     }
-        // }
-        // $gacha->update(['count'=> $gacha->count + $number ]);
-        
-        // return $max_point;
-        // // return $result = [
-        // //     'result' => 0,
-        // //     'max_point' => $max_point
-        // // ];
+                return "123123 - " . $res->result;
+
+                $lock?->release();
+                if ($res['result'] == 0) {
+                    $max_point = $res['max_point'];
+                    $gacha_record->update(['status'=>1]);
+                            
+                    $dp = $number + $user->dp;
+                    $point = $user->point;
+                    $point = $point - $gacha->point * $number;
+                    $user->update(['dp'=>$dp, 'point'=>$point]);
+
+                    $hide_cat_bar = 1;
+                    $video = getVideo($max_point);
+
+                    $result -> success = true;
+                    $result->token = $token;
+                    $result->video = $video;
+                    
+                    return $result;
+                }
+                if ($res['result'] == 1) $result -> message = "サーバーが混み合っております。少し時間をおいて再度お試しください。";
+                else if ($res['result'] == 2) $result -> message = "ガチャ回数を超えました！";
+                else if ($res['result'] == 3) $result -> message = "ガチャ時間を超えました！";
+                else if ($res['result'] == 4) $result -> message = "ユーザーポイントが足りません。";
+
+                return $result;
+            } catch (LockTimeoutException $e) {
+                $result -> message = "ガチャ時間を超えました！";
+                return $result;
+            }
+        } finally {
+            $userLock?->release();
+        }
     }
 
     public function get_period_day($current) {
@@ -564,35 +496,6 @@ class ApiController extends Controller
 
         return json_encode($res);
     }
-
-    // public function favorite() {
-    //     $user = auth()->user();
-    //     $products = Favorite::where('user_id', $user->id)->orderBy('id', 'ASC')->get();
-    //     $products = FavoriteListResource::collection($products);  
-    //     $hide_cat_bar = 1;
-    //     // return $products;
-    //     $hide_back_btn = 1;
-    //     return inertia('User/Favorite', compact('products', 'hide_cat_bar', 'hide_back_btn'));
-    // }
-
-    // public function favorite_add(Request $request) {
-    //     $res = ['status'=>0];
-    //     $id = $request->id;
-    //     $value = $request->value;
-    //     if ($id) {
-    //         $user = auth()->user();
-    //         if ($value) {
-    //             $products = Favorite::where('user_id', $user->id)->where('product_id', $id)->get();
-    //             if (!count($products)) {
-    //                 Favorite::create(['user_id'=>$user->id, 'product_id'=>$id]);
-    //             }
-    //         } else {
-    //             Favorite::where('user_id', $user->id)->where('product_id', $id)->delete();
-    //         }
-    //         $res['status'] = 1;
-    //     }
-    //     return redirect()->back()->with('message', '保存しました！')->with('title', 'お気に入り')->with('message_id', Str::random(9))->with('type', 'dialog');
-    // }
 
     public function profile() {
         $user = auth('api')->user();
@@ -917,147 +820,147 @@ class ApiController extends Controller
         ];
     }
 
-    public function startPost(Request $request) {
-        $id = $request->id;
-        $number = $request->number;
-        $gacha = Gacha::find($id);
-        $user = auth('api')->user();
-        $userLock = Cache::lock('startGacha'.$user->id, 60);
+    // public function startPost(Request $request) {
+    //     $id = $request->id;
+    //     $number = $request->number;
+    //     $gacha = Gacha::find($id);
+    //     $user = auth('api')->user();
+    //     $userLock = Cache::lock('startGacha'.$user->id, 60);
 
-        $result = (object)[
-            "success" => false,
-        ];
+    //     $result = (object)[
+    //         "success" => false,
+    //     ];
 
-        if (!$userLock->get()) {
-            return $result;
-        }
+    //     if (!$userLock->get()) {
+    //         return $result;
+    //     }
 
-        try {
+    //     try {
 
-            if (!$gacha || $gacha->count_card == $gacha->count) {
-                return $result; 
-            }
+    //         if (!$gacha || $gacha->count_card == $gacha->count) {
+    //             return $result; 
+    //         }
             
-            $totalSpin = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->sum('type');
-            $remainingSpin = $gacha->spin_limit - $totalSpin;
-            if ($remainingSpin < 0) $remainingSpin = 0;
+    //         $totalSpin = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->sum('type');
+    //         $remainingSpin = $gacha->spin_limit - $totalSpin;
+    //         if ($remainingSpin < 0) $remainingSpin = 0;
             
-            $count_rest = $gacha->count_card - $gacha->count;
-            if ($number > $count_rest) $number = $count_rest;
-            if ($number > $remainingSpin) {
-                return response()->json([
-                    'message' => 'このガチャは'.$gacha->spin_limit.'回までガチャできます。 すでに回したガチャ数は'.$totalSpin.'回です。',
-                    'message_id' => Str::random(9),
-                    'title' => 'ガチャ回数超過!'
-                ]);
-            }
+    //         $count_rest = $gacha->count_card - $gacha->count;
+    //         if ($number > $count_rest) $number = $count_rest;
+    //         if ($number > $remainingSpin) {
+    //             return response()->json([
+    //                 'message' => 'このガチャは'.$gacha->spin_limit.'回までガチャできます。 すでに回したガチャ数は'.$totalSpin.'回です。',
+    //                 'message_id' => Str::random(9),
+    //                 'title' => 'ガチャ回数超過!'
+    //             ]);
+    //         }
     
-            $this->check_current_status($gacha);
-            $status = $gacha->gacha_limit_status;
-            if ($status == 1) {
-                if ($number > 1) {
-                    $message = '1日1回以上ガチャできません。';
-                    return redirect()->back()->with('message', $message)->with('title', '1日1回ガチャ制限')->with('message_id', Str::random(9))->with('type', 'dialog');
-                }
-                $last = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->latest()->first();
-                if ($last) {
-                    $now = $this->get_period_day(date('Y-m-d H:i:s'));
-                    $record = $this->get_period_day($last->updated_at);
-                    if ($now == $record) {
-                        $message = '1日1回以上ガチャできません。';
-                        return response()->json([
-                            'message' => $message,
-                            'title' => '1日1回ガチャ制限',
-                            'message_id' => Str::random(9)
-                        ]);
-                    }
-                }
-            }     
-            if ($number > $remainingSpin) {
-                return response()->json([
-                    'message' => 'このガチャは'.$gacha->spin_limit.'回までガチャできます。<br>すでに回したガチャ数は'.$totalSpin.'回です。',
-                    'title' => 'ガチャ回数超過!',
-                    'message_id' => Str::random(9)
-                ]);
-            }
+    //         $this->check_current_status($gacha);
+    //         $status = $gacha->gacha_limit_status;
+    //         if ($status == 1) {
+    //             if ($number > 1) {
+    //                 $message = '1日1回以上ガチャできません。';
+    //                 return redirect()->back()->with('message', $message)->with('title', '1日1回ガチャ制限')->with('message_id', Str::random(9))->with('type', 'dialog');
+    //             }
+    //             $last = Gacha_record::where('user_id', $user->id)->where('gacha_id', $id)->where('status', 1)->latest()->first();
+    //             if ($last) {
+    //                 $now = $this->get_period_day(date('Y-m-d H:i:s'));
+    //                 $record = $this->get_period_day($last->updated_at);
+    //                 if ($now == $record) {
+    //                     $message = '1日1回以上ガチャできません。';
+    //                     return response()->json([
+    //                         'message' => $message,
+    //                         'title' => '1日1回ガチャ制限',
+    //                         'message_id' => Str::random(9)
+    //                     ]);
+    //                 }
+    //             }
+    //         }     
+    //         if ($number > $remainingSpin) {
+    //             return response()->json([
+    //                 'message' => 'このガチャは'.$gacha->spin_limit.'回までガチャできます。<br>すでに回したガチャ数は'.$totalSpin.'回です。',
+    //                 'title' => 'ガチャ回数超過!',
+    //                 'message_id' => Str::random(9)
+    //             ]);
+    //         }
             
-            $gacha_point = $gacha->point * $number;
-            $user_point = $user->point;
-            if ($user_point < $gacha_point) {
-                return response()->json([
-                    'url' => 'points'
-                ]);
-            }
+    //         $gacha_point = $gacha->point * $number;
+    //         $user_point = $user->point;
+    //         if ($user_point < $gacha_point) {
+    //             return response()->json([
+    //                 'url' => 'points'
+    //             ]);
+    //         }
     
-            $lock = Cache::lock('startGacha', 60);
-            try {
-                $lock->block(10);
+    //         $lock = Cache::lock('startGacha', 60);
+    //         try {
+    //             $lock->block(10);
                 
-                $data = [
-                    'user_id' => $user->id,
-                    'gacha_id' => $gacha->id,
-                    'type' => $number
-                ];
+    //             $data = [
+    //                 'user_id' => $user->id,
+    //                 'gacha_id' => $gacha->id,
+    //                 'type' => $number
+    //             ];
 
-                $gacha_record = Gacha_record::create($data);
+    //             $gacha_record = Gacha_record::create($data);
 
-                $token = $gacha_record->id; 
+    //             $token = $gacha_record->id; 
                 
-                $result = $this->reward($user, $gacha, $number, $token); 
+    //             $result = $this->reward($user, $gacha, $number, $token); 
 
-                $lock?->release();
+    //             $lock?->release();
 
-                if (isset($result['max_point'])) {
-                    $max_point = $result['max_point'];
-                    $gacha_record->update(['status'=>1]);
+    //             if (isset($result['max_point'])) {
+    //                 $max_point = $result['max_point'];
+    //                 $gacha_record->update(['status'=>1]);
                     
-                    $dp = $number + $user->dp;
-                    $point = $user->point;
-                    $point = $point - $gacha->point * $number;
-                    $user->update(['dp'=>$dp, 'point'=>$point]);
+    //                 $dp = $number + $user->dp;
+    //                 $point = $user->point;
+    //                 $point = $point - $gacha->point * $number;
+    //                 $user->update(['dp'=>$dp, 'point'=>$point]);
 
-                    $hide_cat_bar = 1;
-                    $video = getVideo($max_point);
+    //                 $hide_cat_bar = 1;
+    //                 $video = getVideo($max_point);
 
-                    return response()->json([
-                        'video' => $video,
-                        'token' => $token,
-                        'hide_cat_bar' => $hide_cat_bar
-                    ]);
-                    // return inertia('User/Video', compact('hide_cat_bar', 'video', 'token'));
-                }
-                if ($result==1) {
-                    $text = "サーバーが混み合っております。少し時間をおいて再度お試しください。";
-                    $hide_cat_bar = 1;
-                    return inertia('NoProduct', compact('text', 'hide_cat_bar'));
-                }
+    //                 return response()->json([
+    //                     'video' => $video,
+    //                     'token' => $token,
+    //                     'hide_cat_bar' => $hide_cat_bar
+    //                 ]);
+    //                 // return inertia('User/Video', compact('hide_cat_bar', 'video', 'token'));
+    //             }
+    //             if ($result==1) {
+    //                 $text = "サーバーが混み合っております。少し時間をおいて再度お試しください。";
+    //                 $hide_cat_bar = 1;
+    //                 return inertia('NoProduct', compact('text', 'hide_cat_bar'));
+    //             }
         
-                if ($result==2) {
-                    $text = "ガチャ回数を超えました！";
-                    $hide_cat_bar = 1;
-                    return inertia('NoProduct', compact('text', 'hide_cat_bar'));
-                }
+    //             if ($result==2) {
+    //                 $text = "ガチャ回数を超えました！";
+    //                 $hide_cat_bar = 1;
+    //                 return inertia('NoProduct', compact('text', 'hide_cat_bar'));
+    //             }
         
-                if ($result==3) {
-                    $text = "ガチャ時間を超えました！";
-                    $hide_cat_bar = 1;
-                    return inertia('NoProduct', compact('text', 'hide_cat_bar'));
-                }
+    //             if ($result==3) {
+    //                 $text = "ガチャ時間を超えました！";
+    //                 $hide_cat_bar = 1;
+    //                 return inertia('NoProduct', compact('text', 'hide_cat_bar'));
+    //             }
         
-                if ($result==4) {
-                    $text = "ユーザーポイントが足りません。";
-                    $hide_cat_bar = 1;
-                    return inertia('NoProduct', compact('text', 'hide_cat_bar'));
-                }
-            } catch (LockTimeoutException $e) {
-                $text = "ガチャ時間を超えました！";
-                $hide_cat_bar = 1;
-                return inertia('NoProduct', compact('text', 'hide_cat_bar'));
-            }
-        } finally {
-            $userLock?->release();
-        }
-    }
+    //             if ($result==4) {
+    //                 $text = "ユーザーポイントが足りません。";
+    //                 $hide_cat_bar = 1;
+    //                 return inertia('NoProduct', compact('text', 'hide_cat_bar'));
+    //             }
+    //         } catch (LockTimeoutException $e) {
+    //             $text = "ガチャ時間を超えました！";
+    //             $hide_cat_bar = 1;
+    //             return inertia('NoProduct', compact('text', 'hide_cat_bar'));
+    //         }
+    //     } finally {
+    //         $userLock?->release();
+    //     }
+    // }
 
     public $config = [
         'testOrLive' => 'test',  // live &  test
